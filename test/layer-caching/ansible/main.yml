@@ -1,0 +1,21 @@
+---
+- hosts: all
+  gather_facts: false
+  tasks:
+  - raw: apt-get update
+  - raw: (which python && which aptitude) || apt-get install -y python python-apt aptitude
+- hosts: host1
+  roles:
+  - ntp
+- hosts: host2
+  roles:
+  - ntp
+  - apache2
+  tasks:
+  - copy: src=ports.conf dest=/etc/apache2/ports.conf
+    notify:
+    - ports changed
+  handlers:
+  - name: ports changed
+    command: "touch /tmp/ports-changed"
+

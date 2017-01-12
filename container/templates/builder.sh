@@ -18,3 +18,9 @@ if [ "${ANSIBLE_ORCHESTRATED_HOSTS}" != "" ]; then
 fi
 
 "$@"
+command_result=$?
+
+docker ps | tail -n +2 | awk '{print $1, $NF}' | grep -vF ansible_ansible-container_1 | awk '{print $1}' | xargs docker stop -t 1
+
+exit $command_result
+

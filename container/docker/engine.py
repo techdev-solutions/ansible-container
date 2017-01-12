@@ -132,7 +132,8 @@ class Engine(BaseEngine):
                         arcname='Dockerfile')
 
             for context_file in ['builder.sh', 'ansible-container-inventory.py',
-                                 'ansible.cfg', 'wait_on_host.py', 'ac_galaxy.py']:
+                                 'ansible.cfg', 'wait_on_host.py', 'ac_galaxy.py',
+                                 'docker-strategy.py']:
                 tarball.add(os.path.join(jinja_template_path(), context_file),
                             arcname=context_file)
 
@@ -143,8 +144,9 @@ class Engine(BaseEngine):
             return client.build(fileobj=tarball_file,
                                 custom_context=True,
                                 tag=self.builder_container_img_tag,
-                                nocache=True,
-                                rm=True)
+                                #nocache=True,
+                                #rm=True
+                                )
 
     def get_image_id_by_tag(self, name):
         """
@@ -368,8 +370,7 @@ class Engine(BaseEngine):
 
         :return: dictionary
         """
-        return {'--abort-on-container-exit': True,
-                '--force-recreate': True}
+        return {'--force-recreate': True}
 
     def orchestrate_run_extra_args(self):
         """
@@ -573,10 +574,12 @@ class Engine(BaseEngine):
 
     def post_build(self, host, version, flatten=True, purge_last=True):
         client = self.get_client()
-        container_id, = client.containers(
+        container_info, = client.containers(
             filters={'name': 'ansible_%s_1' % host},
-            limit=1, all=True, quiet=True
+            limit=1, all=True
         )
+        container_id = container_info['Id']
+        parent_id = container_info['ImageID']
         previous_image_id, previous_image_buildstamp = get_latest_image_for(
             self.project_name, host, client
         )
@@ -588,7 +591,7 @@ class Engine(BaseEngine):
             entrypoint = json.dumps(entrypoint)
         image_config = dict(
             USER=self.config['services'][host].get('user', 'root'),
-            LABEL='com.docker.compose.oneoff="" com.docker.compose.project="%s"' % self.project_name,
+            WORKDIR=self.config['services'][host].get('working_dir', '/'),
             ENTRYPOINT=entrypoint,
             CMD=cmd
         )

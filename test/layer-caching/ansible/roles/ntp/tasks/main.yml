@@ -1,0 +1,5 @@
+---
+- name: Upgrade APT
+  apt: upgrade=yes
+- name: Install NTP
+  apt: name=ntp state=latest
