@@ -18,7 +18,7 @@ try:
 except ImportError:
     from ansible.utils.display import Display
     display = Display()
-from ansible.playbook.role import Role
+from ansible.playbook.task import Task
 
 import docker
 from docker.utils import kwargs_from_env
@@ -37,6 +37,7 @@ class StrategyModule(LinearStrategyModule):
     last_role_per_host = {}
     last_block_per_host = {}
     fingerprint_hash = {}
+    cache_is_busted = {}
     _client = None
     project_name = 'ansible'
 
@@ -69,11 +70,12 @@ class StrategyModule(LinearStrategyModule):
         )
         return container_id
 
-    def commit_layer(self, host, layer_fingerprint):
+    def commit_layer(self, host):
         """
         Kills the running container for host and commits an image based on it,
         marking what the parent image ID is.
         """
+        layer_fingerprint = self.fingerprint_hash[host].hexdigest()
         debug('commit_layer(%s), fingerprint %s' % (host, layer_fingerprint))
         client = self.get_client()
         parent_id = self.running_image_id_for_host(host)
@@ -100,14 +102,50 @@ class StrategyModule(LinearStrategyModule):
         running container with the same configuration but using the provided image
         """
         client = self.get_client()
-        container_config = client.inspect_container(self.container_id_for_host(host))['Config']
+        container_info = client.inspect_container(self.container_id_for_host(host))
+        container_config = container_info['Config']
         # debug('%s' % container_config)
         name = self.container_name_for_host(host)
+        if container_info['State']['Running']:
+            client.kill(name)
         client.remove_container(name)
         container_config['Image'] = image_id
         result = client.create_container_from_config(container_config, name=name)
         new_container_id = result['Id']
         client.start(container=new_container_id)
+
+    def get_cached_layer(self, host, fingerprint):
+        client = self.get_client()
+        try:
+            image_id = client.images(
+                all=True, quiet=True,
+                filters={'label': 'com.ansible.container.fingerprint=%s'
+                                  % fingerprint})[0]
+            # Ensure the parent matches too
+            # image_data = client.inspect_image(image_id)
+            # parent_image_label = image_data['Config']['Labels']['com.ansible.container.parent_image']
+            # assert parent_image_label == parent_id
+            return image_id
+        except IndexError:
+            # There was no image returned by Docker
+            return None
+        except KeyError:
+            # The image didn't have the parent_image label
+            debug('Missing parent_image label on image %s' % image_id)
+            return None
+        except AssertionError:
+            # The parent_image label didn't match the parent image ID
+            # debug('Mismatched parent_image label on image %s - %s != %s' % (
+            #     image_id, parent_id, parent_image_label
+            # ))
+            return None
+
+    def make_noop_task(self, loader):
+        noop_task = Task()
+        noop_task.action = 'meta'
+        noop_task.args['_raw_params'] = 'noop'
+        noop_task.set_loader(loader)
+        return noop_task
 
     def _get_next_task_lockstep(self, hosts, iterator):
         """
@@ -118,10 +156,13 @@ class StrategyModule(LinearStrategyModule):
         if self._tqm._unreachable_hosts or self._tqm._failed_hosts:
             display.display('Build failed! Aborting')
             sys.exit(127)
+
         parent_results = super(StrategyModule, self)._get_next_task_lockstep(hosts, iterator)
         parent_results_dict = dict(parent_results)
+
         for host in hosts:
             display.display('Getting next task for %s' % host)
+            debug('Host state for %s is %s' % (host, iterator.get_host_state(host)))
             task = parent_results_dict.get(host, None)
             debug('Host = %s, task = %s' % (host, task))
             role = getattr(task, '_role', None)
@@ -130,41 +171,75 @@ class StrategyModule(LinearStrategyModule):
                             getattr(task, '_block', None) or getattr(task, '_task_include', None))
             debug('Current task role: %s, current task block: %s' % (
                 role, block))
-            if os.environ.get('ANSIBLE_CONTAINER_DEBUG') and repr(task) not in NOOP_TASKS:
-                role_hash = self.fingerprint_hash.get(host, hashlib.sha256()).copy()
-                block_hash = self.fingerprint_hash.get(host, hashlib.sha256()).copy()
-                if role:
-                    self.hash_role(role_hash, role)
-                    debug('Role hash: %s' % role_hash.hexdigest())
-                if block:
-                    self.hash_block(block_hash, block)
-                    debug('Block hash: %s' % block_hash.hexdigest())
-            # So commit after every role, every play that has tasks that
-            # are not in roles, and every include
+            # things like flush_handlers are special and don't impact layering
+            if repr(task) in NOOP_TASKS:
+                continue
+
+            current_layer_hash = self.fingerprint_hash.get(host, hashlib.sha256()).copy()
+            if role:
+                self.hash_role(current_layer_hash, role)
+                debug('Role hash: %s' % current_layer_hash.hexdigest())
+            elif block:
+                self.hash_block(current_layer_hash, block)
+                debug('Block hash: %s' % current_layer_hash.hexdigest())
+
+            # Are we at the very first task for the run?
+            if host not in self.fingerprint_hash:
+                image_id = self.get_cached_layer(host, current_layer_hash.hexdigest())
+                if image_id:
+                    # There's an image already built
+                    debug('Found previously cached image for this layer: %s' % image_id)
+                    self.cache_is_busted[host] = False
+                    self.fingerprint_hash[host] = current_layer_hash
+                    self.switch_to_image(host, image_id)
+                else:
+                    # There's no image built
+                    debug('Did not find previously cached image for this layer.')
+                    self.cache_is_busted[host] = True
+                    self.fingerprint_hash[host] = hashlib.sha256()
+
+            # So commit after every role, after every play that has tasks that
+            # are not in roles, and after every include
             role_changed = (self.last_role_per_host.get(host, None) and
                            self.last_role_per_host[host] != role)
             # The linear strategy spits out a None task at the end of a play
-            is_new_block = task is None or (not role and role_changed
-                                            and repr(task) not in NOOP_TASKS)
+            is_new_block = task is None or (not role and role_changed)
             is_new_role = role and role_changed
             debug('is_new_block: %s, is_new_role: %s' % (is_new_block, is_new_role))
             if is_new_block or is_new_role:
-                # Initialize the fingerprint hash with the current layer's
-                # hash
-                hash_obj = self.fingerprint_hash.get(host, hashlib.sha256())
                 if is_new_role:
-                    self.hash_role(hash_obj, self.last_role_per_host[host])
+                    self.hash_role(self.fingerprint_hash[host],
+                                   self.last_role_per_host[host])
                 else:
-                    self.hash_block(hash_obj, self.last_block_per_host[host])
-                image_id = self.commit_layer(host, hash_obj.hexdigest())
-                self.switch_to_image(host, image_id)
-                self.fingerprint_hash[host] = hash_obj
-            # flush_handlers appears as a different block
-            if repr(task) not in NOOP_TASKS:
-                self.last_block_per_host[host] = block
+                    self.hash_block(self.fingerprint_hash[host],
+                                    self.last_block_per_host[host])
+                # Only commit if cache is busted for this host
+                if self.cache_is_busted[host]:
+                    debug('Cache already busted for host %s, so committing' % host)
+                    image_id = self.commit_layer(host)
+                    self.switch_to_image(host, image_id)
+                else:
+                    image_id = self.get_cached_layer(host,
+                                                     current_layer_hash.hexdigest())
+                    if image_id:
+                        # cache is still intact
+                        debug('Switching host %s to cached image %s' % (host, image_id))
+                        self.switch_to_image(host, image_id)
+                    else:
+                        # cache is sooooo busted!
+                        debug('No image found for new block! Cache busted for %s' % host)
+                        self.cache_is_busted[host] = True
+
+            self.last_block_per_host[host] = block
             self.last_role_per_host[host] = role
 
-        return parent_results
+
+        # return [(host, task if self.cache_is_busted.get(host, False) else noop_task)
+        #         for (host, task) in parent_results]
+        return [(host, (parent_results_dict[host]
+                        if self.cache_is_busted.get(host, False)
+                        else self.make_noop_task(iterator._play._loader)))
+                for host in hosts]
 
     def hash_task(self, hash_obj, task):
         # debug(u'Task attributes: %s' % task._attributes)
