@@ -8,6 +8,7 @@ logger = logging.getLogger(__name__)
 import os
 import sys
 import hashlib
+import collections
 
 my_linear = sys.modules['ansible.plugins.strategy.linear']
 del sys.modules['ansible.plugins.strategy.linear']
@@ -25,6 +26,7 @@ from docker.utils import kwargs_from_env
 
 NOOP_TASKS = [
     'TASK: setup',
+    'TASK: Gathering Facts',
     'TASK: meta (flush_handlers)'
 ]
 
@@ -36,8 +38,9 @@ class StrategyModule(LinearStrategyModule):
 
     last_role_per_host = {}
     last_block_per_host = {}
-    fingerprint_hash = {}
-    cache_is_busted = {}
+    fingerprint_hash = collections.defaultdict(hashlib.sha256)
+    cache_is_busted = collections.defaultdict(lambda: False)
+    is_new_play = collections.defaultdict(lambda: True)
     _client = None
     project_name = 'ansible'
 
@@ -162,7 +165,7 @@ class StrategyModule(LinearStrategyModule):
 
         for host in hosts:
             display.display('Getting next task for %s' % host)
-            debug('Host state for %s is %s' % (host, iterator.get_host_state(host)))
+            # debug('Host state for %s is %s' % (host, iterator.get_host_state(host)))
             task = parent_results_dict.get(host, None)
             debug('Host = %s, task = %s' % (host, task))
             role = getattr(task, '_role', None)
@@ -175,7 +178,12 @@ class StrategyModule(LinearStrategyModule):
             if repr(task) in NOOP_TASKS:
                 continue
 
-            current_layer_hash = self.fingerprint_hash.get(host, hashlib.sha256()).copy()
+            current_layer_hash = self.fingerprint_hash[host].copy()
+            role_changed = (self.last_role_per_host.get(host, None) and
+                           self.last_role_per_host[host] != role)
+            if role_changed:
+                self.hash_role(current_layer_hash,
+                               self.last_role_per_host[host])
             if role:
                 self.hash_role(current_layer_hash, role)
                 debug('Role hash: %s' % current_layer_hash.hexdigest())
@@ -183,31 +191,33 @@ class StrategyModule(LinearStrategyModule):
                 self.hash_block(current_layer_hash, block)
                 debug('Block hash: %s' % current_layer_hash.hexdigest())
 
-            # Are we at the very first task for the run?
-            if host not in self.fingerprint_hash:
+            is_new_play = self.is_new_play[host]
+
+            # At the beginning of new plays, if cache isn't busted yet, we should
+            # check to see if we need to load a cached image
+            if is_new_play and not self.cache_is_busted[host]:
                 image_id = self.get_cached_layer(host, current_layer_hash.hexdigest())
                 if image_id:
                     # There's an image already built
                     debug('Found previously cached image for this layer: %s' % image_id)
-                    self.cache_is_busted[host] = False
-                    self.fingerprint_hash[host] = current_layer_hash
                     self.switch_to_image(host, image_id)
                 else:
                     # There's no image built
                     debug('Did not find previously cached image for this layer.')
                     self.cache_is_busted[host] = True
-                    self.fingerprint_hash[host] = hashlib.sha256()
 
-            # So commit after every role, after every play that has tasks that
-            # are not in roles, and after every include
-            role_changed = (self.last_role_per_host.get(host, None) and
-                           self.last_role_per_host[host] != role)
+            # So commit after every play and after every role that is not the
+            # last thing in a play
+
             # The linear strategy spits out a None task at the end of a play
+            # So the first part of the "or" is for that. The second part covers
+            # the case where we have tasks as well as roles in a play, the last
+            # role finished but the play isn't over.
             is_new_block = task is None or (not role and role_changed)
             is_new_role = role and role_changed
             debug('is_new_block: %s, is_new_role: %s' % (is_new_block, is_new_role))
             if is_new_block or is_new_role:
-                if is_new_role:
+                if role_changed:
                     self.hash_role(self.fingerprint_hash[host],
                                    self.last_role_per_host[host])
                 else:
@@ -219,17 +229,25 @@ class StrategyModule(LinearStrategyModule):
                     image_id = self.commit_layer(host)
                     self.switch_to_image(host, image_id)
                 else:
-                    image_id = self.get_cached_layer(host,
-                                                     current_layer_hash.hexdigest())
-                    if image_id:
-                        # cache is still intact
-                        debug('Switching host %s to cached image %s' % (host, image_id))
-                        self.switch_to_image(host, image_id)
-                    else:
-                        # cache is sooooo busted!
-                        debug('No image found for new block! Cache busted for %s' % host)
-                        self.cache_is_busted[host] = True
+                    # If task is None, we finished stepping through what we knew
+                    # was cached, but we don't know whether there's a cached layer
+                    # for what's next, and we won't know that until the next iteration.
+                    # However if we ended a role and that's why we're here, the
+                    # task we're about to return is part of the next layer, so we
+                    # _can_ check to see if cache is preserved.
+                    if task is not None:
+                        image_id = self.get_cached_layer(host,
+                                                         current_layer_hash.hexdigest())
+                        if image_id:
+                            # cache is still intact
+                            debug('Switching host %s to cached image %s' % (host, image_id))
+                            self.switch_to_image(host, image_id)
+                        else:
+                            # cache is sooooo busted!
+                            debug('No image found for new block! Cache busted for %s' % host)
+                            self.cache_is_busted[host] = True
 
+            self.is_new_play[host] = task is None
             self.last_block_per_host[host] = block
             self.last_role_per_host[host] = role
 
@@ -237,7 +255,7 @@ class StrategyModule(LinearStrategyModule):
         # return [(host, task if self.cache_is_busted.get(host, False) else noop_task)
         #         for (host, task) in parent_results]
         return [(host, (parent_results_dict[host]
-                        if self.cache_is_busted.get(host, False)
+                        if self.cache_is_busted[host] or task is None
                         else self.make_noop_task(iterator._play._loader)))
                 for host in hosts]
 
@@ -277,6 +295,3 @@ class StrategyModule(LinearStrategyModule):
         self.hash_dir(hash_obj, role_path)
         for dependency in role._dependencies:
             self.hash_role(hash_obj, dependency)
-
-
-

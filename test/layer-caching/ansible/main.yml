@@ -2,15 +2,26 @@
 - hosts: all
   gather_facts: false
   tasks:
+  # noop task
   - raw: apt-get update
   - raw: (which python && which aptitude) || apt-get install -y python python-apt aptitude
+  # noop task
+  # noop task
+  # none task - commit, fingerprint based on block
 - hosts: host1
+  # noop task
   roles:
   - ntp
+  # noop task
+  # noop task
+  # none task - commit, fingerprint based on role
 - hosts: host2
+  # noop task
   roles:
   - ntp
+  # commit, fingerprint based on role
   - apache2
+  # commit, fingerprint based on role
   tasks:
   - copy: src=ports.conf dest=/etc/apache2/ports.conf
     notify:
@@ -18,4 +29,8 @@
   handlers:
   - name: ports changed
     command: "touch /tmp/ports-changed"
+  # noop task
+  # noop task
+  # none task - commit, fingerprint based on block
+
 
