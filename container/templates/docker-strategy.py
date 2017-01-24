@@ -85,9 +85,11 @@ class StrategyModule(LinearStrategyModule):
         client.kill(self.container_name_for_host(host))
         image_config = dict(
             LABEL='com.ansible.container.parent_image="%s" '
-                  'com.ansible.container.fingerprint="%s"' % (
+                  'com.ansible.container.fingerprint="%s" '
+                  'com.ansible.container.built_as="%s"' % (
                 parent_id,
-                layer_fingerprint)
+                layer_fingerprint,
+                host)
         )
         display.display('Committing image...')
         result = client.commit(self.container_id_for_host(host),
@@ -120,15 +122,17 @@ class StrategyModule(LinearStrategyModule):
     def get_cached_layer(self, host, fingerprint):
         client = self.get_client()
         try:
-            image_id = client.images(
+            image_ids = client.images(
                 all=True, quiet=True,
                 filters={'label': 'com.ansible.container.fingerprint=%s'
-                                  % fingerprint})[0]
-            # Ensure the parent matches too
-            # image_data = client.inspect_image(image_id)
-            # parent_image_label = image_data['Config']['Labels']['com.ansible.container.parent_image']
-            # assert parent_image_label == parent_id
-            return image_id
+                                  % fingerprint})
+            # Ensure the build host matches
+            for image_id in image_ids:
+                image_data = client.inspect_image(image_id)
+                built_as = image_data['Config']['Labels']['com.ansible.container.built_as']
+                # Don't forget, host is a host object, not just a string
+                if built_as == str(host):
+                    return image_id
         except IndexError:
             # There was no image returned by Docker
             return None
