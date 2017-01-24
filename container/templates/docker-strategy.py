@@ -91,7 +91,7 @@ class StrategyModule(LinearStrategyModule):
                 layer_fingerprint,
                 host)
         )
-        display.display('Committing image...')
+        display.display('Committing image layer...')
         result = client.commit(self.container_id_for_host(host),
                                message='Built using Ansible Container',
                                changes=u'\n'.join(
@@ -168,7 +168,7 @@ class StrategyModule(LinearStrategyModule):
         parent_results_dict = dict(parent_results)
 
         for host in hosts:
-            display.display('Getting next task for %s' % host)
+            debug('Getting next task for %s' % host)
             # debug('Host state for %s is %s' % (host, iterator.get_host_state(host)))
             task = parent_results_dict.get(host, None)
             debug('Host = %s, task = %s' % (host, task))
@@ -255,6 +255,8 @@ class StrategyModule(LinearStrategyModule):
             self.last_block_per_host[host] = block
             self.last_role_per_host[host] = role
 
+            if not self.cache_is_busted[host] and task:
+                display.display('%s [cached]' % task)
 
         # return [(host, task if self.cache_is_busted.get(host, False) else noop_task)
         #         for (host, task) in parent_results]
@@ -263,13 +265,40 @@ class StrategyModule(LinearStrategyModule):
                         else self.make_noop_task(iterator._play._loader)))
                 for host in hosts]
 
+    SRC_SUBPATH_MAP = {
+        'assemble': 'files',
+        'copy': 'files',
+        'file': 'files',
+        'patch': 'files',
+        'synchronize': 'files',
+        'script': 'files',
+        'unarchive': 'files',
+        'template': 'templates',
+        'include_vars': 'vars'
+    }
+
     def hash_task(self, hash_obj, task):
-        # debug(u'Task attributes: %s' % task._attributes)
         hash_obj.update(repr(task._attributes))
+        hash_obj.update('::')
+        if 'src' in task._attributes['args']:
+            src = task._attributes['args']['src']
+            prefix_path = self.SRC_SUBPATH_MAP.get(
+                task._attributes.get('action'), '')
+            path_stack = task.get_search_path()
+            actual_src = self._loader.path_dwim_relative_stack(path_stack,
+                                                               prefix_path,
+                                                               src)
+            if not actual_src:
+                return
+            if os.path.isdir(actual_src):
+                self.hash_dir(hash_obj, actual_src)
+            else:
+                self.hash_file(hash_obj, actual_src)
 
     def hash_block(self, hash_obj, play):
         # debug(u'Play attributes: %s' % play._attributes)
         hash_obj.update(repr(play._attributes))
+        hash_obj.update('::')
         for task in play.block:
             self.hash_task(hash_obj, task)
 
@@ -281,6 +310,7 @@ class StrategyModule(LinearStrategyModule):
                 if not data:
                     break
                 hash_obj.update(data)
+                hash_obj.update('::')
 
     def hash_dir(self, hash_obj, dir_path):
         # debug('hash_dir: dir_path = %s' % (dir_path,))
@@ -289,6 +319,7 @@ class StrategyModule(LinearStrategyModule):
                 abs_file_path = os.path.join(root, file_path)
                 # debug('hash_dir: abs_file_path = %s' % (abs_file_path,))
                 hash_obj.update(abs_file_path)
+                hash_obj.update('::')
                 self.hash_file(hash_obj, abs_file_path)
 
     def hash_role(self, hash_obj, role):
