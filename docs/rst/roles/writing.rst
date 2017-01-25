@@ -49,7 +49,7 @@ Clean up the filesystem
 ```````````````````````
 
 Another thing to consider when executing a role within a container is the size of the final image. Ansible Container starts with
-a base image and adds a layer to it. What's in that layer is the result of all the tasks executed in ``main.yml``, including any files
+a base image and adds layers to it. What's in those layers is the result of all the plays and roles executed in ``main.yml``, including any files
 downloaded or copied files.
 
 Lots of tasks download archive files, especially package managers, and either keep them in a cache directory or never clean up

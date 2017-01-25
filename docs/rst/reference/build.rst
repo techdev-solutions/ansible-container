@@ -9,6 +9,14 @@ the end of a successful run of this command, in your container engine you will h
 images built for each of the containers in your orchestration. This is analogous to
 ``docker build``.
 
+**New in version 0.3.0**
+
+During the build, Ansible Container will commit a new container image layer for
+each role, play, and include. As a full playbook run can take quite a bit of time,
+Ansible Container reuses built layers provided that the role, play, or include for
+that layer has not changed. It's also smart enough to consider whether the ``src``
+content referenced in a particular task has changed.
+
 .. option:: --flatten
 
 By default, Ansible Container commits the changes your playbook made to the base image,
@@ -20,12 +28,14 @@ Container flattens the union filesystem of your image to a single layer.
     The image is flattened by exporting the container to a tar file and re-importing the tar 
     file as a new image. A side effect of performing this operation is a loss of image metadata. 
 
-.. option:: --from-scratch
+.. option:: --no-cache
 
-By default, Ansible Container starts with the last instance of your containers and runs your
-playbook against it. That way, if a build fails, you're not starting from zero when rebuilding.
-With this option, Ansible Container starts with fresh copies of your base images and
-rebuilds from zero.
+**New in version 0.3.0**
+
+As described above, Ansible Container attempts to make rebuilds more efficient by
+re-using cached image layers when it believes the play or role for that layer has
+not changed. Use this parameter to explicitly disable this cache reuse and to make
+a clean rebuild.
 
 .. option:: --local-builder
 
