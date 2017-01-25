@@ -39,7 +39,8 @@ class StrategyModule(LinearStrategyModule):
     last_role_per_host = {}
     last_block_per_host = {}
     fingerprint_hash = collections.defaultdict(hashlib.sha256)
-    cache_is_busted = collections.defaultdict(lambda: False)
+    cache_is_busted = collections.defaultdict(
+        lambda: 'ANSIBLE_CONTAINER_NO_CACHE' in os.environ)
     is_new_play = collections.defaultdict(lambda: True)
     _client = None
     project_name = 'ansible'

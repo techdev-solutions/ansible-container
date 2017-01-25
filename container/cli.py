@@ -92,12 +92,10 @@ def subcmd_build_parser(parser, subparser):
                                 u'previously built image for your hosts. Disable '
                                 u'that with this flag.',
                            dest='purge_last', default=True)
-    subparser.add_argument('--from-scratch', action='store_true',
-                           help=u'Instead of running the Ansible playbook against '
-                                u'the existing copies of your containers, run the '
-                                u'playbook against the base image, rebuilding them '
-                                u'from scratch.',
-                           dest='rebuild', default=False)
+    subparser.add_argument('--no-cache', action='store_true',
+                           help=u'Perform a clean build of your images without '
+                                u'reusing cached intermediate image layers.',
+                           dest='no_cache', default=False)
     subparser.add_argument('--local-builder', action='store_true',
                            help=u'Instead of using the Ansible Builder Container '
                                 u'image from Docker Hub, generate one locally.')

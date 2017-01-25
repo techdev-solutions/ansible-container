@@ -8,6 +8,7 @@ ansible-container:
     {% if env.DOCKER_TLS_VERIFY %}- DOCKER_TLS_VERIFY{% endif %}
     {% if env.DOCKER_CERT_PATH %}- DOCKER_CERT_PATH=/etc/docker{% endif %}
     {% if params.debug %}- ANSIBLE_CONTAINER_DEBUG=1{% endif %}
+    {% if params.no_cache %}- ANSIBLE_CONTAINER_NO_CACHE=0{% endif %}
     - COMPOSE_HTTP_TIMEOUT=3000
     - DOCKER_API_VERSION={{ api_version }}
     - ANSIBLE_ORCHESTRATED_HOSTS={% for host in hosts %}{{ host }}{% if not loop.last %},{% endif %}{% endfor %}

@@ -355,19 +355,18 @@ def cmdrun_init(base_path, project=None, **kwargs):
 
 
 def cmdrun_build(base_path, engine_name, flatten=True, purge_last=True, local_builder=False,
-                 rebuild=False, service=None, ansible_options='', save_build_container=False,
+                 no_cache=False, service=None, ansible_options='', save_build_container=False,
                  roles_path=None, **kwargs):
     engine_args = kwargs.copy()
     engine_args.update(locals())
     engine_obj = load_engine(**engine_args)
+    if local_builder:
+        create_build_container(engine_obj, base_path)
     try:
-        if rebuild:
-            create_build_container(engine_obj, base_path)
-        else:
-            builder_img_id = engine_obj.get_image_id_by_tag(engine_obj.builder_container_img_tag)
+        builder_img_id = engine_obj.get_image_id_by_tag(engine_obj.builder_container_img_tag)
     except NameError:
-        if local_builder:
-            create_build_container(engine_obj, base_path)
+        # The builder image will be pulled from Docker Hub
+        pass
     with make_temp_dir() as temp_dir:
         logger.info('Starting %s engine to build your images...'
                     % engine_obj.orchestrator_name)
@@ -376,7 +375,7 @@ def cmdrun_build(base_path, engine_name, flatten=True, purge_last=True, local_bu
             touched_hosts &= set(service)
             if not touched_hosts:
                 raise AnsibleContainerHostNotTouchedByPlaybook()
-        engine_obj.orchestrate('build', temp_dir, context=dict(rebuild=rebuild))
+        engine_obj.orchestrate('build', temp_dir, context=dict(no_cache=no_cache))
         if not engine_obj.build_was_successful():
             logger.error('Ansible playbook run failed.')
             if not save_build_container:
@@ -393,7 +392,6 @@ def cmdrun_build(base_path, engine_name, flatten=True, purge_last=True, local_bu
             logger.info('Cleaning up Ansible Container builder...')
             builder_container_id = engine_obj.get_builder_container_id()
             engine_obj.remove_container_by_id(builder_container_id)
-
 
 def cmdrun_run(base_path, engine_name, service=[], production=False, **kwargs):
     assert_initialized(base_path)

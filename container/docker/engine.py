@@ -501,21 +501,6 @@ class Engine(BaseEngine):
                 else:
                     service_config['environment'] = dict(ANSIBLE_CONTAINER=1)
 
-            if not self.params['rebuild']:
-                tag = '%s-%s:latest' % (self.project_name,
-                                        service)
-                try:
-                    self.get_image_id_by_tag(tag)
-                except NameError:
-                    logger.info('No image found for tag %s, so building from scratch',
-                                '%s-%s:latest' % (self.project_name, service))
-                    # have to rebuild this from scratch, as the image doesn't
-                    # exist in the engine
-                    pass
-                else:
-                    logger.debug('No NameError raised when searching for tag %s',
-                                 '%s-%s:latest' % (self.project_name, service))
-                    service_config['image'] = tag
             self._fix_volumes(service, service_config, compose_version=version, top_level_volumes=volumes)
 
         if volumes:
