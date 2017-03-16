@@ -240,13 +240,14 @@ class BaseEngine(object):
         """
         raise NotImplementedError()
 
-    def push_latest_image(self, host, url=None, namespace=None, tag=None):
+    def push_latest_image(self, host, url=None, namespace=None, skip_project_name=False, tag=None):
         """
         Push the latest built image for a host to a registry
 
         :param host: The host in the container.yml to push
         :param url: The url of the registry.
         :param namespace: The username or organization that owns the image repo
+        :param skip_project_name: don't add project name to the image name
         :return: None
         """
         raise NotImplementedError()
@@ -423,7 +424,7 @@ def cmdrun_restart(base_path, engine_name, service=[], **kwargs):
         engine_obj.restart('restart', temp_dir, hosts=hosts)
 
 
-def cmdrun_push(base_path, engine_name, username=None, password=None, email=None, push_to=None, tag=None, **kwargs):
+def cmdrun_push(base_path, engine_name, username=None, password=None, email=None, push_to=None, skip_project_name=False, tag=None, **kwargs):
     assert_initialized(base_path)
     engine_args = kwargs.copy()
     engine_args.update(locals())
@@ -452,7 +453,7 @@ def cmdrun_push(base_path, engine_name, username=None, password=None, email=None
     logger.info('Pushing to "%s/%s' % (re.sub(r'/$', '', url), namespace))
 
     for host in engine_obj.hosts_touched_by_playbook():
-        engine_obj.push_latest_image(host, url=url, namespace=namespace, tag=tag)
+        engine_obj.push_latest_image(host, url=url, namespace=namespace, skip_project_name=skip_project_name, tag=tag)
     logger.info('Done!')
 
 
